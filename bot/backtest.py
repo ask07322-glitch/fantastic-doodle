@@ -7,9 +7,9 @@ from .strategy import Strategy, day_of, signal_for
 
 
 def run(df: pd.DataFrame, strategy: Strategy | None = None, risk: Risk | None = None,
-        cash: float = 1_000_000.0, warmup: int = 0) -> dict:
+        cash: float = 1_000_000.0, warmup: int = 0, slippage: float = 0.0) -> dict:
     st, risk = strategy or Strategy(), risk or Risk()
-    b = PaperBroker(cash=cash)
+    b = PaperBroker(cash=cash, slippage=slippage)
     curve, idx, trades = [], [], []
     peak, last_exit, buy_day = 0.0, -10**9, None
     for i in range(max(st.slow + 4, warmup), len(df) + 1):
@@ -24,7 +24,7 @@ def run(df: pd.DataFrame, strategy: Strategy | None = None, risk: Risk | None = 
                 last_exit = i
                 trades.append({"i": i - 1, "side": "sell", "price": price,
                                "reason": why or "signal",
-                               "pnl_pct": (price / entry - 1) * 100})
+                               "pnl_pct": (price * (1 - slippage) / entry - 1) * 100})
         elif (i - last_exit > st.cooldown
               and (not st.one_per_day or day_of(df["ts"].iat[i - 1]) != buy_day)
               and signal_for(window, st) == "buy"):

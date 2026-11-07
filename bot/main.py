@@ -50,6 +50,8 @@ def main():
     ap.add_argument("--backtest", action="store_true", help="백테스트만 실행 (그림 저장)")
     ap.add_argument("--compare", action="store_true", help="여러 코인에서 base vs improved 비교")
     ap.add_argument("--candles", type=int, default=1000, help="백테스트에 쓸 캔들 개수")
+    ap.add_argument("--slippage", type=float, default=0.001,
+                    help="체결가가 불리하게 밀리는 비율 (기본 0.001 = 0.1%%). 백테스트/비교/모의매매에 적용")
     ap.add_argument("--live", action="store_true", help="실거래 (기본은 모의매매)")
     a = ap.parse_args()
 
@@ -59,13 +61,13 @@ def main():
 
     if a.compare:
         from .compare import compare
-        compare(fetch, pub, max(a.candles, 2000))
+        compare(fetch, pub, max(a.candles, 2000), slippage=a.slippage)
         return
 
     if a.backtest:
         from . import chart
         df = fetch(pub, a.symbol, a.timeframe, a.candles)
-        res = backtest(df, st, risk)
+        res = backtest(df, st, risk, slippage=a.slippage)
         print(f"[{a.strategy}] 데이터 {len(df)}개 | 봇 {res['return_pct']:+.2f}% | 그냥 들고 있기 "
               f"{res['buy_hold_pct']:+.2f}% | 최대 하락 {res['max_drawdown_pct']:.2f}% | 거래 {res['trades']}번")
         ma = st.kind == "ma"
@@ -81,7 +83,7 @@ def main():
             return
         broker = LiveBroker(a.exchange, a.symbol)
     else:
-        broker = PaperBroker()
+        broker = PaperBroker(slippage=a.slippage)
     print(f"[start] {a.exchange} {a.symbol} {a.timeframe} strategy={a.strategy} "
           f"mode={'LIVE' if a.live else 'PAPER'}")
 

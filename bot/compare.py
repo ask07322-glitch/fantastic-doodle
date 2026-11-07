@@ -8,7 +8,8 @@ FRAMES = ["1h", "4h"]
 WARMUP = 200  # 모든 전략이 같은 시점부터 시작하도록
 
 
-def compare(fetch, ex, candles: int = 2000, coins=COINS, frames=FRAMES) -> None:
+def compare(fetch, ex, candles: int = 2000, coins=COINS, frames=FRAMES, slippage: float = 0.0) -> None:
+    print(f"가정: 수수료 0.05% + 슬리피지 {slippage*100:.2f}% (사고팔 때마다 불리하게 체결)")
     names = list(PRESETS)
     st = {k: dict(ret=[], mdd=[], tr=[], beat=0, pos=0, both=0) for k in names}
     print(f"{'코인':<9}{'봉':<4}{'그냥보유':>9}" + "".join(f"{k:>10}" for k in names) + "   (수익률 %)")
@@ -22,7 +23,7 @@ def compare(fetch, ex, candles: int = 2000, coins=COINS, frames=FRAMES) -> None:
                 continue
             h = len(df) // 2
             halves = (df.iloc[:h].reset_index(drop=True), df.iloc[h:].reset_index(drop=True))
-            res = {k: run(df, *PRESETS[k], warmup=WARMUP) for k in names}
+            res = {k: run(df, *PRESETS[k], warmup=WARMUP, slippage=slippage) for k in names}
             n += 1
             bh = res[names[0]]["buy_hold_pct"]
             print(f"{sym:<9}{tf:<4}{bh:>8.1f}%" + "".join(f"{res[k]['return_pct']:>9.1f}%" for k in names))
@@ -31,7 +32,7 @@ def compare(fetch, ex, candles: int = 2000, coins=COINS, frames=FRAMES) -> None:
                 s["ret"].append(r["return_pct"]); s["mdd"].append(r["max_drawdown_pct"]); s["tr"].append(r["trades"])
                 s["beat"] += r["return_pct"] > bh
                 s["pos"] += r["return_pct"] > 0
-                s["both"] += all(run(x, *PRESETS[k], warmup=WARMUP // 2)["return_pct"] > 0 for x in halves)
+                s["both"] += all(run(x, *PRESETS[k], warmup=WARMUP // 2, slippage=slippage)["return_pct"] > 0 for x in halves)
     if not n:
         return
     print(f"\n=== 요약 ({n}건) ===")

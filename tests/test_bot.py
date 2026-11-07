@@ -113,3 +113,12 @@ def test_fetch_retries_on_rate_limit(monkeypatch):
 
     df = m.fetch(Ex(), "BTC/KRW", "1h", 100)
     assert len(df) == 1 and Ex.calls == 3
+
+
+def test_slippage_makes_results_worse():
+    a, b = PaperBroker(cash=100_000), PaperBroker(cash=100_000, slippage=0.001)
+    for x in (a, b):
+        x.buy(100, 50_000); x.sell_all(100)
+    assert b.cash < a.cash
+    df = series(n=800, seed=7)
+    assert run(df, *PRESETS["base"], slippage=0.002)["return_pct"] < run(df, *PRESETS["base"])["return_pct"]

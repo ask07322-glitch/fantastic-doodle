@@ -12,6 +12,7 @@ class PaperBroker:
     qty: float = 0.0
     entry: float = 0.0
     fee: float = FEE
+    slippage: float = 0.0   # 체결가가 불리하게 밀리는 비율 (0.001 = 0.1%)
     log: list = field(default_factory=list)
 
     def balance(self, price: float) -> tuple[float, float]:
@@ -23,17 +24,19 @@ class PaperBroker:
     def buy(self, price: float, budget: float) -> bool:
         if budget <= 0 or budget > self.cash or self.qty > 0:
             return False
-        q = budget * (1 - self.fee) / price
+        fill = price * (1 + self.slippage)   # 살 때는 조금 비싸게
+        q = budget * (1 - self.fee) / fill
         self.cash -= budget
-        self.qty, self.entry = q, price
-        self.log.append(("buy", price, q))
+        self.qty, self.entry = q, fill
+        self.log.append(("buy", fill, q))
         return True
 
     def sell_all(self, price: float) -> bool:
         if self.qty <= 0:
             return False
-        self.cash += self.qty * price * (1 - self.fee)
-        self.log.append(("sell", price, self.qty))
+        fill = price * (1 - self.slippage)   # 팔 때는 조금 싸게
+        self.cash += self.qty * fill * (1 - self.fee)
+        self.log.append(("sell", fill, self.qty))
         self.qty, self.entry = 0.0, 0.0
         return True
 
