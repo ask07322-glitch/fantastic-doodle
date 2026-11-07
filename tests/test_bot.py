@@ -3,6 +3,7 @@ from bot.strategy import signal
 from bot.risk import Risk
 from bot.broker import PaperBroker
 from bot.backtest import run
+from bot.presets import PRESETS
 
 
 def series(n=300, seed=1):
@@ -41,3 +42,25 @@ def test_paper_roundtrip_applies_fees():
 def test_backtest_runs():
     res = run(series())
     assert {"return_pct", "max_drawdown_pct", "trades"} <= res.keys()
+
+
+def test_trailing_stop_and_no_take_profit():
+    r = Risk(stop_loss=0.03, take_profit=0.0, trailing_start=0.03, trailing_gap=0.02)
+    assert r.exit_reason(100, 110, 110) is None          # 익절 없이 계속 보유
+    assert r.exit_reason(100, 107.7, 110) == "trailing"  # 최고점 110에서 2%+ 하락
+    assert r.exit_reason(100, 102, 102) is None          # 아직 추적 시작 전
+
+
+def test_trend_filter_blocks_buy_in_downtrend():
+    # 긴 하락 후 짧은 반등: 골든크로스가 나도 큰 추세 필터가 매수를 막아야 함
+    close = list(np.linspace(200, 100, 200)) + list(np.linspace(100, 108, 20))
+    base = {signal(pd.DataFrame({"close": close[:i]}), 5, 20) for i in range(150, len(close) + 1)}
+    filt = {signal(pd.DataFrame({"close": close[:i]}), 5, 20, trend=100) for i in range(150, len(close) + 1)}
+    assert "buy" in base and "buy" not in filt
+
+
+def test_both_presets_run_and_improved_trades_less():
+    df = series(n=800, seed=7)
+    b, i = run(df, *PRESETS["base"]), run(df, *PRESETS["improved"])
+    assert i["trades"] <= b["trades"]
+    assert i["max_drawdown_pct"] > -50

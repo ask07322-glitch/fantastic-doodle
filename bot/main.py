@@ -1,12 +1,12 @@
-"""실행: python -m bot.main [--live] [--backtest]"""
+"""실행: python -m bot.main [--live] [--backtest] [--compare]"""
 from __future__ import annotations
 import argparse, csv, time, datetime as dt
 import ccxt
 import pandas as pd
 from .backtest import run as backtest
 from .broker import PaperBroker, LiveBroker
-from .risk import Risk
-from .strategy import signal
+from .presets import PRESETS
+from .strategy import signal_for
 
 
 def fetch(ex, symbol, tf, limit=200) -> pd.DataFrame:
@@ -32,26 +32,33 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--exchange", default="upbit")
     ap.add_argument("--symbol", default="BTC/KRW")
-    ap.add_argument("--timeframe", default="15m")
-    ap.add_argument("--fast", type=int, default=10)
-    ap.add_argument("--slow", type=int, default=30)
+    ap.add_argument("--timeframe", default="1h")
+    ap.add_argument("--strategy", default="improved", choices=list(PRESETS),
+                    help="base=처음 버전, improved=개선 버전")
     ap.add_argument("--interval", type=int, default=30, help="폴링 간격(초)")
     ap.add_argument("--backtest", action="store_true", help="백테스트만 실행 (그림 저장)")
-    ap.add_argument("--candles", type=int, default=500, help="백테스트에 쓸 캔들 개수")
+    ap.add_argument("--compare", action="store_true", help="여러 코인에서 base vs improved 비교")
+    ap.add_argument("--candles", type=int, default=1000, help="백테스트에 쓸 캔들 개수")
     ap.add_argument("--live", action="store_true", help="실거래 (기본은 모의매매)")
     a = ap.parse_args()
 
     pub = getattr(ccxt, a.exchange)({"enableRateLimit": True})
-    risk = Risk()
+    st, risk = PRESETS[a.strategy]
+
+    if a.compare:
+        from .compare import compare
+        compare(fetch, pub, max(a.candles, 2000))
+        return
 
     if a.backtest:
         from . import chart
         df = fetch(pub, a.symbol, a.timeframe, a.candles)
-        res = backtest(df, risk, a.fast, a.slow)
-        print(f"데이터 {len(df)}개 | 봇 {res['return_pct']:+.2f}% | 그냥 들고 있기 "
+        res = backtest(df, st, risk)
+        print(f"[{a.strategy}] 데이터 {len(df)}개 | 봇 {res['return_pct']:+.2f}% | 그냥 들고 있기 "
               f"{res['buy_hold_pct']:+.2f}% | 최대 하락 {res['max_drawdown_pct']:.2f}% | 거래 {res['trades']}번")
-        path = chart.save(df, res, a.fast, a.slow,
-                          f"{a.symbol} {a.timeframe} 백테스트", "backtest.png")
+        path = chart.save(df, res, st.fast, st.slow,
+                          f"{a.symbol} {a.timeframe} 백테스트 ({a.strategy})",
+                          "backtest.png", st.trend)
         print("그림 저장:", path)
         chart.open_file(path)
         return
@@ -62,13 +69,15 @@ def main():
         broker = LiveBroker(a.exchange, a.symbol)
     else:
         broker = PaperBroker()
-    print(f"[start] {a.exchange} {a.symbol} {a.timeframe} mode={'LIVE' if a.live else 'PAPER'}")
+    print(f"[start] {a.exchange} {a.symbol} {a.timeframe} strategy={a.strategy} "
+          f"mode={'LIVE' if a.live else 'PAPER'}")
 
+    need = max(st.slow, st.trend + 6) + 10
     day, day_start_eq, halted = dt.date.today(), None, False
-    last_candle = None
+    last_candle, peak, bars_since_exit = None, 0.0, 10**6
     while True:
         try:
-            df = fetch(pub, a.symbol, a.timeframe)
+            df = fetch(pub, a.symbol, a.timeframe, max(200, need))
             price = float(df["close"].iloc[-1])
             eq = broker.equity(price)
             if dt.date.today() != day or day_start_eq is None:
@@ -77,16 +86,21 @@ def main():
                 halted = True
                 print("[halt] 일일 최대 손실 도달 — 오늘 신규 매수 중단")
 
-            if broker.qty * price > 1000:  # 보유 중: 손절/익절은 매 폴링 확인
-                why = risk.exit_reason(broker.entry, price)
-                new_candle = df["ts"].iloc[-2] != last_candle
-                if why or (new_candle and signal(df, a.fast, a.slow) == "sell"):
+            new_candle = df["ts"].iloc[-2] != last_candle
+            if new_candle:
+                bars_since_exit += 1
+            if broker.qty * price > 1000:  # 보유 중: 손절/추적손절은 매 폴링 확인
+                peak = max(peak, price)
+                why = risk.exit_reason(broker.entry, price, peak)
+                if why or (new_candle and signal_for(df, st) == "sell"):
                     broker.sell_all(price)
+                    bars_since_exit = 0
                     print(f"[sell] {price:,.0f} {why or 'signal'} equity={broker.equity(price):,.0f}")
                     _log("sell", price)
-            elif not halted and df["ts"].iloc[-2] != last_candle:
-                if signal(df, a.fast, a.slow) == "buy":
+            elif not halted and new_candle and bars_since_exit > st.cooldown:
+                if signal_for(df, st) == "buy":
                     if broker.buy(price, risk.buy_budget(broker.cash)):
+                        peak = price
                         print(f"[buy] {price:,.0f}")
                         _log("buy", price)
             last_candle = df["ts"].iloc[-2]

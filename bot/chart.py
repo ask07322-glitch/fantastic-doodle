@@ -14,11 +14,11 @@ for _f in ("Malgun Gothic", "AppleGothic", "NanumGothic", "Noto Sans CJK KR"):
         break
 matplotlib.rcParams["axes.unicode_minus"] = False
 
-REASON = {"stop_loss": "손절", "take_profit": "익절", "signal": "신호"}
+REASON = {"stop_loss": "손절", "take_profit": "익절", "trailing": "추적손절", "signal": "신호"}
 
 
 def save(df: pd.DataFrame, res: dict, fast: int, slow: int,
-         title: str, path: str = "backtest.png") -> str:
+         title: str, path: str = "backtest.png", trend: int = 0) -> str:
     x = pd.to_datetime(df["ts"], unit="ms") if "ts" in df else df.index
     c = df["close"]
     fig, (a1, a2) = plt.subplots(2, 1, figsize=(13, 8), sharex=True,
@@ -27,6 +27,8 @@ def save(df: pd.DataFrame, res: dict, fast: int, slow: int,
     a1.plot(x, c.rolling(fast).mean(), color="#f5a623", lw=1, label=f"단기선({fast})")
     a1.plot(x, c.rolling(slow).mean(), color="#7b4bd0", lw=1, label=f"장기선({slow})")
 
+    if trend:
+        a1.plot(x, c.rolling(trend).mean(), color="#2a9d8f", lw=1.2, ls="--", label=f"큰추세선({trend})")
     for t in res["trade_list"]:
         xi, p = x[t["i"]], t["price"]
         if t["side"] == "buy":
@@ -42,7 +44,7 @@ def save(df: pd.DataFrame, res: dict, fast: int, slow: int,
     a1.scatter([], [], marker="v", color="#1e63d6", label="매도")
     a1.set_title(f"{title}\n봇 수익 {res['return_pct']:+.2f}%  |  그냥 들고 있었다면 "
                  f"{res['buy_hold_pct']:+.2f}%  |  거래 {res['trades']}번", fontsize=12)
-    a1.set_ylabel("가격"); a1.legend(loc="upper left", ncol=5); a1.grid(alpha=.3)
+    a1.set_ylabel("가격"); a1.legend(loc="upper left", ncol=6); a1.grid(alpha=.3)
 
     eq = pd.Series(res["equity_curve"], index=[x[i] for i in res["equity_index"]])
     a2.plot(eq.index, eq / res["start_cash"] * 100 - 100, color="#e53935", lw=1.5, label="봇")
