@@ -9,9 +9,10 @@ DAY_MS = 86_400_000  # 업비트 일봉 기준(09:00 KST = 00:00 UTC)
 
 @dataclass(frozen=True)
 class Strategy:
-    kind: str = "ma"     # "ma" 이동평균 | "vbreak" 변동성 돌파
+    kind: str = "ma"     # "ma" 이동평균 | "vbreak" 변동성 돌파 | "trendhold" 큰 흐름 따라 보유
     k: float = 0.5       # vbreak: 어제 변동폭의 k배를 오늘 시가에 더한 가격이 매수선
     day_ma: int = 0      # vbreak: N일 평균 위일 때만 매수 (0이면 끔)
+    band: float = 0.0    # trendhold: 평균선 위/아래 이만큼(예: 0.02=2%) 벗어나야 사고팔기 (잦은 왔다갔다 방지)
     fast: int = 10
     slow: int = 30
     rsi_max: float = 70.0
@@ -27,6 +28,8 @@ class Strategy:
         """실시간 실행 때 필요한 최소 캔들 수."""
         if self.kind == "vbreak":
             return int((self.day_ma + 3) * bars_per_day) + 5
+        if self.kind == "trendhold":
+            return self.trend + 10
         return max(self.slow, self.trend + 6) + 10
 
 
@@ -97,7 +100,25 @@ def vbreak_signal(df: pd.DataFrame, k: float = 0.5, day_ma: int = 0) -> str:
     return "buy"
 
 
+def trendhold_signal(df: pd.DataFrame, n: int, band: float = 0.0) -> str:
+    """큰 흐름 따라 보유: 확정된 종가가 n봉 평균 위면 'buy'(보유), 아래면 'sell'(현금).
+    평균선 근처(±band)에서는 'hold'로 지금 상태를 유지한다.
+    """
+    if len(df) < n + 3:
+        return "hold"
+    c = df["close"].iloc[:-1]
+    ma = float(c.rolling(n).mean().iloc[-1])
+    p = float(c.iloc[-1])
+    if p > ma * (1 + band):
+        return "buy"
+    if p < ma * (1 - band):
+        return "sell"
+    return "hold"
+
+
 def signal_for(df: pd.DataFrame, s: Strategy) -> str:
+    if s.kind == "trendhold":
+        return trendhold_signal(df, s.trend, s.band)
     if s.kind == "vbreak":
         return vbreak_signal(df, s.k, s.day_ma)
     return signal(df, s.fast, s.slow, s.rsi_max, s.trend)

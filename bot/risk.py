@@ -6,7 +6,7 @@ from dataclasses import dataclass
 @dataclass
 class Risk:
     position_pct: float = 0.30      # 1회 매수에 쓸 현금 비중
-    stop_loss: float = 0.03         # -3% 손절
+    stop_loss: float = 0.03         # -3% 손절 (0이면 끔)
     take_profit: float = 0.06       # +6% 익절 (0이면 끔)
     trailing_start: float = 0.0     # 이만큼 오르면 추적손절 시작 (0이면 끔)
     trailing_gap: float = 0.0       # 최고가 대비 이만큼 내려오면 매도
@@ -18,7 +18,7 @@ class Risk:
         return v if v >= self.min_order_value else 0.0
 
     def exit_reason(self, entry: float, price: float, peak: float | None = None) -> str | None:
-        if price <= entry * (1 - self.stop_loss):
+        if self.stop_loss and price <= entry * (1 - self.stop_loss):
             return "stop_loss"
         if self.take_profit and price >= entry * (1 + self.take_profit):
             return "take_profit"

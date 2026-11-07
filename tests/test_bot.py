@@ -1,9 +1,9 @@
 import numpy as np, pandas as pd
-from bot.strategy import signal, vbreak_signal, Strategy, DAY_MS
+from bot.strategy import signal, vbreak_signal, trendhold_signal, Strategy, DAY_MS
 from bot.risk import Risk
 from bot.broker import PaperBroker
 from bot.backtest import run
-from bot.presets import PRESETS
+from bot.presets import PRESETS, TREND_PRESETS
 
 
 def series(n=300, seed=1):
@@ -122,3 +122,29 @@ def test_slippage_makes_results_worse():
     assert b.cash < a.cash
     df = series(n=800, seed=7)
     assert run(df, *PRESETS["base"], slippage=0.002)["return_pct"] < run(df, *PRESETS["base"])["return_pct"]
+
+
+def test_trendhold_signal():
+    up = pd.DataFrame({"close": np.linspace(100, 200, 150)})
+    dn = pd.DataFrame({"close": np.linspace(200, 100, 150)})
+    assert trendhold_signal(up, 100, 0.02) == "buy"
+    assert trendhold_signal(dn, 100, 0.02) == "sell"
+    assert trendhold_signal(up.iloc[:50], 100) == "hold"   # 데이터 부족
+    flat = pd.DataFrame({"close": [100.0] * 150})
+    assert trendhold_signal(flat, 100, 0.02) == "hold"      # 평균선 근처에서는 상태 유지
+
+
+def test_stop_loss_zero_disables_stop():
+    assert Risk(stop_loss=0.0, take_profit=0.0).exit_reason(100, 1) is None
+
+
+def test_trendhold_avoids_crash_with_few_trades():
+    rng = np.random.default_rng(11)
+    n_up, n_dn = 400, 250
+    drift = np.r_[np.full(n_up, 0.003), np.full(n_dn, -0.004)]
+    c = 100 * np.exp(np.cumsum(drift + rng.normal(0, 0.01, n_up + n_dn)))
+    df = pd.DataFrame({"ts": np.arange(len(c)) * DAY_MS, "close": c})
+    res = run(df, *TREND_PRESETS["trend100"], warmup=105, slippage=0.001)
+    assert res["trades"] <= 6
+    assert res["max_drawdown_pct"] > res["buy_hold_mdd_pct"]   # 보유보다 낙폭이 작아야 함
+    assert res["return_pct"] > res["buy_hold_pct"]             # 급락 전에 빠져나와 이득

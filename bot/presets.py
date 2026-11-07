@@ -16,3 +16,12 @@ PRESETS = {
     # 변동성 돌파 + 5일 평균 위에서만 매수 (하락장 회피)
     "vbreak_f": (Strategy(kind="vbreak", k=0.5, day_ma=5), Risk(stop_loss=0.03, take_profit=0.0)),
 }
+
+
+# 큰 흐름 따라 보유(일봉용): 장기 평균선 위면 전액 보유, 아래면 현금. 손절/익절 없음(평균선 이탈이 곧 매도).
+_TH = dict(position_pct=1.0, stop_loss=0.0, take_profit=0.0)
+TREND_PRESETS = {
+    "trend100": (Strategy(kind="trendhold", trend=100, band=0.02), Risk(**_TH)),
+    "trend200": (Strategy(kind="trendhold", trend=200, band=0.02), Risk(**_TH)),
+}
+ALL_PRESETS = {**PRESETS, **TREND_PRESETS}

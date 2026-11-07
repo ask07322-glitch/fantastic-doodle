@@ -36,6 +36,8 @@ def run(df: pd.DataFrame, strategy: Strategy | None = None, risk: Risk | None = 
         idx.append(i - 1)
     last = float(df["close"].iloc[idx[0] if idx else 0])
     end = float(df["close"].iloc[-1])
+    hold = df["close"].iloc[idx[0]:] if idx else df["close"]
+    hold_mdd = float((hold / hold.cummax() - 1).min()) * 100
     eq = pd.Series(curve)
     mdd = float(((eq / eq.cummax()) - 1).min()) if len(eq) else 0.0
     return {
@@ -43,6 +45,7 @@ def run(df: pd.DataFrame, strategy: Strategy | None = None, risk: Risk | None = 
         "return_pct": (b.equity(end) / cash - 1) * 100,
         "buy_hold_pct": (end / last - 1) * 100,   # 같은 시작 시점부터 그냥 들고 있기
         "max_drawdown_pct": mdd * 100,
+        "buy_hold_mdd_pct": hold_mdd,
         "trades": sum(1 for t in b.log if t[0] == "sell"),
         "trade_list": trades,
         "equity_curve": curve,

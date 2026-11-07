@@ -5,7 +5,7 @@ import ccxt
 import pandas as pd
 from .backtest import run as backtest
 from .broker import PaperBroker, LiveBroker
-from .presets import PRESETS
+from .presets import ALL_PRESETS
 from .strategy import day_of, signal_for
 
 
@@ -43,12 +43,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--exchange", default="upbit")
     ap.add_argument("--symbol", default="BTC/KRW")
-    ap.add_argument("--timeframe", default="1h")
-    ap.add_argument("--strategy", default="improved", choices=list(PRESETS),
-                    help="base=처음 버전, improved=개선 버전")
+    ap.add_argument("--timeframe", default=None, help="기본: trend 전략은 1d, 그 외 1h")
+    ap.add_argument("--strategy", default="improved", choices=list(ALL_PRESETS),
+                    help="base/improved/vbreak/vbreak_f(분·시간봉용), trend100/trend200(일봉용 큰 흐름 보유)")
     ap.add_argument("--interval", type=int, default=30, help="폴링 간격(초)")
     ap.add_argument("--backtest", action="store_true", help="백테스트만 실행 (그림 저장)")
-    ap.add_argument("--compare", action="store_true", help="여러 코인에서 base vs improved 비교")
+    ap.add_argument("--compare", action="store_true", help="여러 코인에서 시간봉 전략들 비교")
+    ap.add_argument("--compare-trend", action="store_true", help="일봉 trend-hold vs 그냥 보유 비교(수익+최대낙폭)")
     ap.add_argument("--candles", type=int, default=1000, help="백테스트에 쓸 캔들 개수")
     ap.add_argument("--slippage", type=float, default=0.001,
                     help="체결가가 불리하게 밀리는 비율 (기본 0.001 = 0.1%%). 백테스트/비교/모의매매에 적용")
@@ -57,22 +58,28 @@ def main():
 
     pub = getattr(ccxt, a.exchange)({"enableRateLimit": True})
     pub.rateLimit = max(pub.rateLimit, 150)  # 요청 간격을 넉넉히 (업비트 한도 보호)
-    st, risk = PRESETS[a.strategy]
+    st, risk = ALL_PRESETS[a.strategy]
+    tf = a.timeframe or ("1d" if st.kind == "trendhold" else "1h")
 
     if a.compare:
         from .compare import compare
         compare(fetch, pub, max(a.candles, 2000), slippage=a.slippage)
         return
 
+    if a.compare_trend:
+        from .compare import compare_trend
+        compare_trend(fetch, pub, max(a.candles, 2000), slippage=a.slippage)
+        return
+
     if a.backtest:
         from . import chart
-        df = fetch(pub, a.symbol, a.timeframe, a.candles)
+        df = fetch(pub, a.symbol, tf, a.candles)
         res = backtest(df, st, risk, slippage=a.slippage)
         print(f"[{a.strategy}] 데이터 {len(df)}개 | 봇 {res['return_pct']:+.2f}% | 그냥 들고 있기 "
               f"{res['buy_hold_pct']:+.2f}% | 최대 하락 {res['max_drawdown_pct']:.2f}% | 거래 {res['trades']}번")
         ma = st.kind == "ma"
         path = chart.save(df, res, st.fast if ma else 0, st.slow if ma else 0,
-                          f"{a.symbol} {a.timeframe} 백테스트 ({a.strategy})",
+                          f"{a.symbol} {tf} 백테스트 ({a.strategy})",
                           "backtest.png", st.trend)
         print("그림 저장:", path)
         chart.open_file(path)
@@ -84,10 +91,10 @@ def main():
         broker = LiveBroker(a.exchange, a.symbol)
     else:
         broker = PaperBroker(slippage=a.slippage)
-    print(f"[start] {a.exchange} {a.symbol} {a.timeframe} strategy={a.strategy} "
+    print(f"[start] {a.exchange} {a.symbol} {tf} strategy={a.strategy} "
           f"mode={'LIVE' if a.live else 'PAPER'}")
 
-    bpd = 86400 / pub.parse_timeframe(a.timeframe)
+    bpd = 86400 / pub.parse_timeframe(tf)
     if st.kind == "vbreak" and bpd < 2:
         raise SystemExit("변동성 돌파는 1일봉 미만 시간봉(예: 1h, 4h)에서만 쓸 수 있습니다.")
     need = st.history_bars(bpd)
@@ -95,7 +102,7 @@ def main():
     last_candle, peak, bars_since_exit, buy_day = None, 0.0, 10**6, None
     while True:
         try:
-            df = fetch(pub, a.symbol, a.timeframe, max(200, need))
+            df = fetch(pub, a.symbol, tf, max(200, need))
             price = float(df["close"].iloc[-1])
             eq = broker.equity(price)
             if dt.date.today() != day or day_start_eq is None:

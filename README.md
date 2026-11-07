@@ -17,3 +17,10 @@ pytest                                                          # 테스트
 - 수익을 보장하지 않습니다. 반드시 백테스트 → 모의매매 → 소액 실거래 순으로 진행하세요.
 - API 키는 출금 권한 OFF, IP 제한을 권장합니다. `.env`는 커밋 금지.
 - 파라미터(`bot/risk.py`, `--fast/--slow`)는 직접 검증 후 조정하세요.
+
+## 큰 흐름 따라 보유 (trend-hold, 일봉)
+```bash
+python -m bot.main --compare-trend                         # 일봉 5년+: trend100/trend200 vs 그냥 보유
+python -m bot.main --backtest --strategy trend200          # 그림으로 보기 (기본 1d)
+```
+장기 평균선 위면 전액 보유, 아래면 현금. 목표는 보유보다 더 버는 것이 아니라 큰 하락을 피하는 것(최대낙폭↓).
