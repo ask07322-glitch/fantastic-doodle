@@ -10,17 +10,23 @@ def run(df: pd.DataFrame, risk: Risk | None = None, fast=10, slow=30,
         cash: float = 1_000_000.0) -> dict:
     risk = risk or Risk()
     b = PaperBroker(cash=cash)
-    curve = []
+    curve, idx, trades = [], [], []
     for i in range(slow + 4, len(df) + 1):
         window = df.iloc[:i]
         price = float(window["close"].iloc[-1])
         if b.qty > 0:
             why = risk.exit_reason(b.entry, price)
             if why or signal(window, fast, slow) == "sell":
+                entry = b.entry
                 b.sell_all(price)
+                trades.append({"i": i - 1, "side": "sell", "price": price,
+                               "reason": why or "signal",
+                               "pnl_pct": (price / entry - 1) * 100})
         elif signal(window, fast, slow) == "buy":
-            b.buy(price, risk.buy_budget(b.cash))
+            if b.buy(price, risk.buy_budget(b.cash)):
+                trades.append({"i": i - 1, "side": "buy", "price": price})
         curve.append(b.equity(price))
+        idx.append(i - 1)
     last = float(df["close"].iloc[-1])
     eq = pd.Series(curve)
     mdd = float(((eq / eq.cummax()) - 1).min()) if len(eq) else 0.0
@@ -30,4 +36,8 @@ def run(df: pd.DataFrame, risk: Risk | None = None, fast=10, slow=30,
         "buy_hold_pct": (last / float(df["close"].iloc[0]) - 1) * 100,
         "max_drawdown_pct": mdd * 100,
         "trades": sum(1 for t in b.log if t[0] == "sell"),
+        "trade_list": trades,
+        "equity_curve": curve,
+        "equity_index": idx,
+        "start_cash": cash,
     }

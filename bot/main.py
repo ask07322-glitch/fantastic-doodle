@@ -10,7 +10,21 @@ from .strategy import signal
 
 
 def fetch(ex, symbol, tf, limit=200) -> pd.DataFrame:
-    rows = ex.fetch_ohlcv(symbol, tf, limit=limit)
+    """limit개 캔들. 200개 넘으면 여러 번 나눠서 가져옵니다."""
+    if limit <= 200:
+        rows = ex.fetch_ohlcv(symbol, tf, limit=limit)
+    else:
+        step = ex.parse_timeframe(tf) * 1000
+        since = ex.milliseconds() - limit * step
+        rows = []
+        while len(rows) < limit:
+            part = ex.fetch_ohlcv(symbol, tf, since=since, limit=200)
+            if not part:
+                break
+            rows += [r for r in part if not rows or r[0] > rows[-1][0]]
+            since = part[-1][0] + step
+            if part[-1][0] >= ex.milliseconds() - step:
+                break
     return pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
 
 
@@ -22,7 +36,8 @@ def main():
     ap.add_argument("--fast", type=int, default=10)
     ap.add_argument("--slow", type=int, default=30)
     ap.add_argument("--interval", type=int, default=30, help="폴링 간격(초)")
-    ap.add_argument("--backtest", action="store_true", help="백테스트만 실행")
+    ap.add_argument("--backtest", action="store_true", help="백테스트만 실행 (그림 저장)")
+    ap.add_argument("--candles", type=int, default=500, help="백테스트에 쓸 캔들 개수")
     ap.add_argument("--live", action="store_true", help="실거래 (기본은 모의매매)")
     a = ap.parse_args()
 
@@ -30,8 +45,15 @@ def main():
     risk = Risk()
 
     if a.backtest:
-        df = fetch(pub, a.symbol, a.timeframe, 200)
-        print(backtest(df, risk, a.fast, a.slow))
+        from . import chart
+        df = fetch(pub, a.symbol, a.timeframe, a.candles)
+        res = backtest(df, risk, a.fast, a.slow)
+        print(f"데이터 {len(df)}개 | 봇 {res['return_pct']:+.2f}% | 그냥 들고 있기 "
+              f"{res['buy_hold_pct']:+.2f}% | 최대 하락 {res['max_drawdown_pct']:.2f}% | 거래 {res['trades']}번")
+        path = chart.save(df, res, a.fast, a.slow,
+                          f"{a.symbol} {a.timeframe} 백테스트", "backtest.png")
+        print("그림 저장:", path)
+        chart.open_file(path)
         return
 
     if a.live:
