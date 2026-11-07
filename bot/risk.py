@@ -1,0 +1,23 @@
+"""포지션 크기/손절/익절 규칙."""
+from __future__ import annotations
+from dataclasses import dataclass
+
+
+@dataclass
+class Risk:
+    position_pct: float = 0.30      # 1회 매수에 쓸 현금 비중
+    stop_loss: float = 0.03         # -3% 손절
+    take_profit: float = 0.06       # +6% 익절
+    max_daily_loss: float = 0.05    # 하루 -5% 넘으면 당일 거래 중단
+    min_order_value: float = 5000.0 # 거래소 최소 주문금액(업비트 KRW 5,000)
+
+    def buy_budget(self, cash: float) -> float:
+        v = cash * self.position_pct
+        return v if v >= self.min_order_value else 0.0
+
+    def exit_reason(self, entry: float, price: float) -> str | None:
+        if price <= entry * (1 - self.stop_loss):
+            return "stop_loss"
+        if price >= entry * (1 + self.take_profit):
+            return "take_profit"
+        return None
