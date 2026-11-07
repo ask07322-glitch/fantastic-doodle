@@ -9,16 +9,27 @@ from .presets import PRESETS
 from .strategy import day_of, signal_for
 
 
+def _page(ex, symbol, tf, **kw):
+    """요청 한도(RateLimitExceeded)에 걸리면 기다렸다가 다시 시도."""
+    for attempt in range(6):
+        try:
+            return ex.fetch_ohlcv(symbol, tf, **kw)
+        except ccxt.RateLimitExceeded:
+            time.sleep(2 * (attempt + 1))
+    raise ccxt.RateLimitExceeded("요청 한도 초과: 잠시 후 다시 시도하세요")
+
+
 def fetch(ex, symbol, tf, limit=200) -> pd.DataFrame:
     """limit개 캔들. 200개 넘으면 여러 번 나눠서 가져옵니다."""
     if limit <= 200:
-        rows = ex.fetch_ohlcv(symbol, tf, limit=limit)
+        rows = _page(ex, symbol, tf, limit=limit)
     else:
         step = ex.parse_timeframe(tf) * 1000
         since = ex.milliseconds() - limit * step
         rows = []
         while len(rows) < limit:
-            part = ex.fetch_ohlcv(symbol, tf, since=since, limit=200)
+            part = _page(ex, symbol, tf, since=since, limit=200)
+            time.sleep(0.15)  # 업비트는 초당 약 10회 제한이라 천천히 요청
             if not part:
                 break
             rows += [r for r in part if not rows or r[0] > rows[-1][0]]
@@ -43,6 +54,7 @@ def main():
     a = ap.parse_args()
 
     pub = getattr(ccxt, a.exchange)({"enableRateLimit": True})
+    pub.rateLimit = max(pub.rateLimit, 150)  # 요청 간격을 넉넉히 (업비트 한도 보호)
     st, risk = PRESETS[a.strategy]
 
     if a.compare:

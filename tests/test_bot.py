@@ -96,3 +96,20 @@ def test_vbreak_backtest_one_buy_per_day():
         res = run(df, *PRESETS[name])
         buys = [df["ts"][t["i"]] // DAY_MS for t in res["trade_list"] if t["side"] == "buy"]
         assert len(buys) == len(set(buys))
+
+
+def test_fetch_retries_on_rate_limit(monkeypatch):
+    import ccxt
+    from bot import main as m
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+
+    class Ex:
+        calls = 0
+        def fetch_ohlcv(self, sym, tf, **kw):
+            Ex.calls += 1
+            if Ex.calls <= 2:
+                raise ccxt.RateLimitExceeded("429")
+            return [[1, 1, 1, 1, 1, 1]]
+
+    df = m.fetch(Ex(), "BTC/KRW", "1h", 100)
+    assert len(df) == 1 and Ex.calls == 3
