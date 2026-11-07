@@ -1,5 +1,5 @@
 import numpy as np, pandas as pd
-from bot.strategy import signal
+from bot.strategy import signal, vbreak_signal, Strategy, DAY_MS
 from bot.risk import Risk
 from bot.broker import PaperBroker
 from bot.backtest import run
@@ -64,3 +64,35 @@ def test_both_presets_run_and_improved_trades_less():
     b, i = run(df, *PRESETS["base"]), run(df, *PRESETS["improved"])
     assert i["trades"] <= b["trades"]
     assert i["max_drawdown_pct"] > -50
+
+
+def _vb_df():
+    # 0일차: 100→110 (변동폭 10). 1일차 시가 105 → 매수선 105+0.5*10 = 110
+    c0 = np.linspace(100, 110, 24)
+    day0 = pd.DataFrame({"open": c0, "high": c0, "low": c0, "close": c0})
+    day1 = pd.DataFrame({"open": 105.0, "high": 105.0, "low": 105.0, "close": 105.0}, index=range(24))
+    day1.loc[1, "close"] = 109.0   # 매수선 아래
+    day1.loc[2, "close"] = 111.0   # 매수선 돌파
+    df = pd.concat([day0, day1], ignore_index=True)
+    df["ts"] = np.arange(len(df)) * (DAY_MS // 24)
+    return df
+
+
+def test_vbreak_signals():
+    df = _vb_df()
+    assert vbreak_signal(df.iloc[:25]) == "sell"   # 새 날의 첫 봉 → 정리
+    assert vbreak_signal(df.iloc[:26]) == "hold"   # 109 < 110
+    assert vbreak_signal(df.iloc[:27]) == "buy"    # 111 > 110
+    assert vbreak_signal(df.iloc[:27], day_ma=5) == "hold"  # 5일 평균 만들 데이터 부족
+
+
+def test_vbreak_backtest_one_buy_per_day():
+    rng = np.random.default_rng(5)
+    n = 24 * 40
+    c = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, n)))
+    df = pd.DataFrame({"ts": np.arange(n) * (DAY_MS // 24), "open": np.r_[c[0], c[:-1]],
+                       "high": c * 1.003, "low": c * 0.997, "close": c})
+    for name in ("vbreak", "vbreak_f"):
+        res = run(df, *PRESETS[name])
+        buys = [df["ts"][t["i"]] // DAY_MS for t in res["trade_list"] if t["side"] == "buy"]
+        assert len(buys) == len(set(buys))

@@ -3,16 +3,16 @@ from __future__ import annotations
 import pandas as pd
 from .broker import PaperBroker
 from .risk import Risk
-from .strategy import Strategy, signal_for
+from .strategy import Strategy, day_of, signal_for
 
 
 def run(df: pd.DataFrame, strategy: Strategy | None = None, risk: Risk | None = None,
-        cash: float = 1_000_000.0) -> dict:
+        cash: float = 1_000_000.0, warmup: int = 0) -> dict:
     st, risk = strategy or Strategy(), risk or Risk()
     b = PaperBroker(cash=cash)
     curve, idx, trades = [], [], []
-    peak, last_exit = 0.0, -10**9
-    for i in range(st.slow + 4, len(df) + 1):
+    peak, last_exit, buy_day = 0.0, -10**9, None
+    for i in range(max(st.slow + 4, warmup), len(df) + 1):
         window = df.iloc[:i]
         price = float(window["close"].iloc[-1])
         if b.qty > 0:
@@ -25,13 +25,16 @@ def run(df: pd.DataFrame, strategy: Strategy | None = None, risk: Risk | None = 
                 trades.append({"i": i - 1, "side": "sell", "price": price,
                                "reason": why or "signal",
                                "pnl_pct": (price / entry - 1) * 100})
-        elif i - last_exit > st.cooldown and signal_for(window, st) == "buy":
+        elif (i - last_exit > st.cooldown
+              and (not st.one_per_day or day_of(df["ts"].iat[i - 1]) != buy_day)
+              and signal_for(window, st) == "buy"):
             if b.buy(price, risk.buy_budget(b.cash)):
                 peak = price
+                buy_day = day_of(df["ts"].iat[i - 1]) if st.one_per_day else None
                 trades.append({"i": i - 1, "side": "buy", "price": price})
         curve.append(b.equity(price))
         idx.append(i - 1)
-    last = float(df["close"].iloc[0 if not len(idx) else idx[0]])
+    last = float(df["close"].iloc[idx[0] if idx else 0])
     end = float(df["close"].iloc[-1])
     eq = pd.Series(curve)
     mdd = float(((eq / eq.cummax()) - 1).min()) if len(eq) else 0.0

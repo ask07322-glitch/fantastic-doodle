@@ -6,7 +6,7 @@ import pandas as pd
 from .backtest import run as backtest
 from .broker import PaperBroker, LiveBroker
 from .presets import PRESETS
-from .strategy import signal_for
+from .strategy import day_of, signal_for
 
 
 def fetch(ex, symbol, tf, limit=200) -> pd.DataFrame:
@@ -56,7 +56,8 @@ def main():
         res = backtest(df, st, risk)
         print(f"[{a.strategy}] 데이터 {len(df)}개 | 봇 {res['return_pct']:+.2f}% | 그냥 들고 있기 "
               f"{res['buy_hold_pct']:+.2f}% | 최대 하락 {res['max_drawdown_pct']:.2f}% | 거래 {res['trades']}번")
-        path = chart.save(df, res, st.fast, st.slow,
+        ma = st.kind == "ma"
+        path = chart.save(df, res, st.fast if ma else 0, st.slow if ma else 0,
                           f"{a.symbol} {a.timeframe} 백테스트 ({a.strategy})",
                           "backtest.png", st.trend)
         print("그림 저장:", path)
@@ -72,9 +73,12 @@ def main():
     print(f"[start] {a.exchange} {a.symbol} {a.timeframe} strategy={a.strategy} "
           f"mode={'LIVE' if a.live else 'PAPER'}")
 
-    need = max(st.slow, st.trend + 6) + 10
+    bpd = 86400 / pub.parse_timeframe(a.timeframe)
+    if st.kind == "vbreak" and bpd < 2:
+        raise SystemExit("변동성 돌파는 1일봉 미만 시간봉(예: 1h, 4h)에서만 쓸 수 있습니다.")
+    need = st.history_bars(bpd)
     day, day_start_eq, halted = dt.date.today(), None, False
-    last_candle, peak, bars_since_exit = None, 0.0, 10**6
+    last_candle, peak, bars_since_exit, buy_day = None, 0.0, 10**6, None
     while True:
         try:
             df = fetch(pub, a.symbol, a.timeframe, max(200, need))
@@ -97,10 +101,13 @@ def main():
                     bars_since_exit = 0
                     print(f"[sell] {price:,.0f} {why or 'signal'} equity={broker.equity(price):,.0f}")
                     _log("sell", price)
-            elif not halted and new_candle and bars_since_exit > st.cooldown:
+            elif (not halted and (new_candle or st.one_per_day) and bars_since_exit > st.cooldown
+                  and (not st.one_per_day or day_of(df["ts"].iloc[-1]) != buy_day)):
+                # 변동성 돌파는 봉 중간에 돌파할 수 있어 매 폴링마다 확인
                 if signal_for(df, st) == "buy":
                     if broker.buy(price, risk.buy_budget(broker.cash)):
                         peak = price
+                        buy_day = day_of(df["ts"].iloc[-1])
                         print(f"[buy] {price:,.0f}")
                         _log("buy", price)
             last_candle = df["ts"].iloc[-2]

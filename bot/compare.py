@@ -1,31 +1,44 @@
-"""여러 코인/시간봉에서 base vs improved 비교표 출력."""
+"""여러 코인/시간봉에서 모든 전략(PRESETS)을 한 표로 비교."""
 from __future__ import annotations
 from .backtest import run
 from .presets import PRESETS
 
 COINS = ["BTC/KRW", "ETH/KRW", "XRP/KRW", "SOL/KRW"]
 FRAMES = ["1h", "4h"]
+WARMUP = 200  # 모든 전략이 같은 시점부터 시작하도록
 
 
 def compare(fetch, ex, candles: int = 2000, coins=COINS, frames=FRAMES) -> None:
-    print(f"{'코인':<9}{'봉':<4}{'기준(그냥보유)':>14}{'base':>9}{'improved':>10}{'거래b/i':>9}{'최대하락b/i':>14}")
-    wins = n = 0
-    sum_b = sum_i = 0.0
+    names = list(PRESETS)
+    st = {k: dict(ret=[], mdd=[], tr=[], beat=0, pos=0, both=0) for k in names}
+    print(f"{'코인':<9}{'봉':<4}{'그냥보유':>9}" + "".join(f"{k:>10}" for k in names) + "   (수익률 %)")
+    n = 0
     for sym in coins:
         for tf in frames:
             try:
-                df = fetch(ex, sym, tf, candles)
-            except Exception as e:  # 상장 안 된 코인 등
+                df = fetch(ex, sym, tf, candles).reset_index(drop=True)
+            except Exception as e:
                 print(f"{sym:<9}{tf:<4} 건너뜀 ({type(e).__name__})")
                 continue
-            r = {k: run(df, *PRESETS[k]) for k in PRESETS}
-            b, i = r["base"], r["improved"]
+            h = len(df) // 2
+            halves = (df.iloc[:h].reset_index(drop=True), df.iloc[h:].reset_index(drop=True))
+            res = {k: run(df, *PRESETS[k], warmup=WARMUP) for k in names}
             n += 1
-            wins += i["return_pct"] > b["return_pct"]
-            sum_b += b["return_pct"]; sum_i += i["return_pct"]
-            print(f"{sym:<9}{tf:<4}{b['buy_hold_pct']:>13.1f}%{b['return_pct']:>8.1f}%{i['return_pct']:>9.1f}%"
-                  f"{b['trades']:>5}/{i['trades']:<3}{b['max_drawdown_pct']:>8.1f}/{i['max_drawdown_pct']:.1f}")
-    if n:
-        print(f"\n비교 {n}건 중 improved가 더 나은 경우: {wins}건")
-        print(f"평균 수익률  base {sum_b/n:+.2f}%  |  improved {sum_i/n:+.2f}%")
-        print("※ 과거 결과일 뿐 미래 수익을 보장하지 않습니다. improved가 이기는 경우가 절반 미만이면 실거래하지 마세요.")
+            bh = res[names[0]]["buy_hold_pct"]
+            print(f"{sym:<9}{tf:<4}{bh:>8.1f}%" + "".join(f"{res[k]['return_pct']:>9.1f}%" for k in names))
+            for k in names:
+                r, s = res[k], st[k]
+                s["ret"].append(r["return_pct"]); s["mdd"].append(r["max_drawdown_pct"]); s["tr"].append(r["trades"])
+                s["beat"] += r["return_pct"] > bh
+                s["pos"] += r["return_pct"] > 0
+                s["both"] += all(run(x, *PRESETS[k], warmup=WARMUP // 2)["return_pct"] > 0 for x in halves)
+    if not n:
+        return
+    print(f"\n=== 요약 ({n}건) ===")
+    print(f"{'전략':<10}{'평균수익':>9}{'평균최대하락':>13}{'평균거래수':>10}{'플러스':>7}{'보유보다나음':>12}{'전후반모두플러스':>14}")
+    for k in names:
+        s = st[k]
+        print(f"{k:<10}{sum(s['ret'])/n:>8.2f}%{sum(s['mdd'])/n:>12.1f}%{sum(s['tr'])/n:>10.1f}"
+              f"{s['pos']:>6}/{n}{s['beat']:>11}/{n}{s['both']:>13}/{n}")
+    print("\n※ 과거 결과일 뿐 미래를 보장하지 않습니다. 수익이 나려면 '플러스'와 '전후반모두플러스'가 "
+          "모두 높아야 하고(절반 이상), 한두 건에만 의존하면 우연일 수 있습니다.")

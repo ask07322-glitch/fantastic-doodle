@@ -24,8 +24,9 @@ def save(df: pd.DataFrame, res: dict, fast: int, slow: int,
     fig, (a1, a2) = plt.subplots(2, 1, figsize=(13, 8), sharex=True,
                                  gridspec_kw={"height_ratios": [3, 2]})
     a1.plot(x, c, color="#555", lw=1, label="가격")
-    a1.plot(x, c.rolling(fast).mean(), color="#f5a623", lw=1, label=f"단기선({fast})")
-    a1.plot(x, c.rolling(slow).mean(), color="#7b4bd0", lw=1, label=f"장기선({slow})")
+    if fast and slow:
+        a1.plot(x, c.rolling(fast).mean(), color="#f5a623", lw=1, label=f"단기선({fast})")
+        a1.plot(x, c.rolling(slow).mean(), color="#7b4bd0", lw=1, label=f"장기선({slow})")
 
     if trend:
         a1.plot(x, c.rolling(trend).mean(), color="#2a9d8f", lw=1.2, ls="--", label=f"큰추세선({trend})")
