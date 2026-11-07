@@ -255,3 +255,60 @@ def test_telegram_retries_on_timeout_and_explains(monkeypatch):
     monkeypatch.setattr(notify.requests, "get", flaky)
     assert notify.find_chat_ids("TOK") == [(7, "나")] and calls["n"] == 3   # 두 번 느려도 세 번째에 성공
     assert "토큰 문제가 아닙니다" in notify.explain(requests.ReadTimeout("x"))
+
+
+def _auto_env(monkeypatch, tmp_path):
+    import ccxt
+    from bot import broker as bm
+    monkeypatch.setattr(ccxt, "fakeex", FakeEx, raising=False)
+    monkeypatch.setattr(bm.time, "sleep", lambda s: None)
+    monkeypatch.setenv("API_KEY", "x"); monkeypatch.setenv("API_SECRET", "y")
+    FakeEx.bal = {"KRW": 100_000.0, "BTC": 0.0}
+    make = lambda sym: bm.LiveBroker("fakeex", sym, str(tmp_path / "state.json"))
+    mk = lambda c: pd.DataFrame({"ts": np.arange(len(c)) * DAY_MS, "close": c})
+    return make, mk, np.linspace(100, 300, 320), np.linspace(300, 100, 320), str(tmp_path / "auto.json")
+
+
+def test_auto_dry_run_never_orders(monkeypatch, tmp_path):
+    from bot.auto import run_auto
+    make, mk, up, dn, sp = _auto_env(monkeypatch, tmp_path)
+    msgs = []
+    kw = dict(coins=["BTC/KRW"], preset="trend200", budget=30000, max_total=100000, live=False, state_path=sp)
+    run_auto(lambda e, s, tf, n: mk(dn), None, msgs.append, None, **kw)   # 기준 저장
+    out = run_auto(lambda e, s, tf, n: mk(up), None, msgs.append, None, **kw)
+    assert out and "모의" in out[0] and FakeEx.bal["KRW"] == 100_000.0
+
+
+def test_auto_live_buy_then_sell_and_caps(monkeypatch, tmp_path):
+    from bot.auto import run_auto
+    make, mk, up, dn, sp = _auto_env(monkeypatch, tmp_path)
+    msgs = []
+    kw = dict(coins=["BTC/KRW"], preset="trend200", budget=30000, max_total=20000, live=True, state_path=sp)
+    run_auto(lambda e, s, tf, n: mk(dn), None, msgs.append, make, **kw)   # 첫 실행: 주문 없음
+    assert FakeEx.bal["KRW"] == 100_000.0
+    run_auto(lambda e, s, tf, n: mk(up), None, msgs.append, make, **kw)   # 매수 신호
+    assert FakeEx.bal["KRW"] == 80_000.0          # 총액 상한 2만원이 1회 한도 3만원보다 우선
+    run_auto(lambda e, s, tf, n: mk(dn), None, msgs.append, make, **kw)   # 매도 신호
+    assert FakeEx.bal["KRW"] == 100_000.0 and FakeEx.bal["BTC"] < 1e-9
+
+
+def test_auto_order_failure_keeps_state_for_retry(monkeypatch, tmp_path):
+    import json
+    from bot.auto import run_auto
+    make, mk, up, dn, sp = _auto_env(monkeypatch, tmp_path)
+    msgs = []
+    kw = dict(coins=["BTC/KRW"], preset="trend200", budget=30000, max_total=100000, live=True, state_path=sp)
+    run_auto(lambda e, s, tf, n: mk(dn), None, msgs.append, make, **kw)
+    def boom(*a, **k): raise RuntimeError("down")
+    monkeypatch.setattr(FakeEx, "create_order", boom)
+    out = run_auto(lambda e, s, tf, n: mk(up), None, msgs.append, make, **kw)
+    assert "주문 실패" in out[0]
+    assert json.load(open(sp))["BTC/KRW"]["state"] == "out"   # 상태 유지 → 다음 실행 때 재시도
+
+
+def test_explain_api_error():
+    import ccxt
+    from bot.apicheck import explain_api_error
+    assert "IP" in explain_api_error(Exception('{"error":{"name":"no_authorization_ip"}}'))
+    assert "권한" in explain_api_error(Exception("out_of_scope"))
+    assert "올바르지" in explain_api_error(ccxt.AuthenticationError("x"))

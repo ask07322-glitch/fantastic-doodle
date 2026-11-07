@@ -5,3 +5,6 @@ state.json
 trades.csv
 backtest.png
 signal_state.json
+auto_state.json
+test_state.json
+signals.log

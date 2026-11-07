@@ -1,12 +1,12 @@
 """실행: python -m bot.main [--live] [--backtest] [--compare]"""
 from __future__ import annotations
-import argparse, csv, time, dataclasses, datetime as dt
+import argparse, csv, os, time, dataclasses, datetime as dt
 import ccxt
 import pandas as pd
 from .backtest import run as backtest
 from .broker import PaperBroker, LiveBroker
 from .notify import Telegram, explain, find_chat_ids, load_env
-from .presets import ALL_PRESETS
+from .presets import ALL_PRESETS, TREND_PRESETS
 from .strategy import day_of, signal_for
 
 
@@ -62,6 +62,12 @@ def main():
     ap.add_argument("--summary", action="store_true", help="--check-signals와 함께: 변경이 없어도 현재 상태 전송")
     ap.add_argument("--telegram-test", action="store_true", help="텔레그램 테스트 메시지 보내기")
     ap.add_argument("--telegram-chat-id", action="store_true", help="텔레그램 채팅 ID 찾기 (봇에게 먼저 메시지를 보낸 뒤)")
+    ap.add_argument("--api-check", action="store_true", help="API 키 점검: 잔고만 읽습니다(주문 없음)")
+    ap.add_argument("--test-order", action="store_true", help="소액(1만원) 시험 주문: 사고 바로 팔아 주문 경로 확인")
+    ap.add_argument("--auto-trade", action="store_true",
+                    help="하루 1번 실행: 신호가 바뀐 코인만 주문(기본 모의, --live면 실제)")
+    ap.add_argument("--budget", type=float, default=30_000, help="--auto-trade: 1회 매수 금액(원)")
+    ap.add_argument("--max-total", type=float, default=100_000, help="--auto-trade: 봇이 보유할 총액 상한(원)")
     ap.add_argument("--live", action="store_true", help="실거래 (기본은 모의매매)")
     a = ap.parse_args()
     load_env()  # .env의 API 키/텔레그램 설정 읽기
@@ -98,6 +104,43 @@ def main():
     if a.compare:
         from .compare import compare
         compare(fetch, pub, max(a.candles, 2000), slippage=a.slippage)
+        return
+
+    def need_live_switch():
+        if os.environ.get("ENABLE_LIVE", "").strip().upper() != "YES":
+            raise SystemExit("실거래 스위치가 꺼져 있습니다. .env에 ENABLE_LIVE=YES 를 넣어야 실제 주문이 나갑니다.")
+
+    if a.api_check:
+        from .apicheck import api_check
+        from .compare import COINS
+        raise SystemExit(0 if api_check(a.exchange, COINS) else 1)
+
+    if a.test_order:
+        from .apicheck import explain_api_error, test_order
+        need_live_switch()
+        print(f"시험 주문: {a.exchange} {a.symbol} 1만원어치를 실제로 사고 바로 전부 팝니다 (비용 보통 수십 원).")
+        if input("진행하려면 'YES' 입력: ") != "YES":
+            return
+        try:
+            test_order(a.exchange, a.symbol)
+        except SystemExit:
+            raise
+        except Exception as e:
+            raise SystemExit(f"시험 주문 실패: {explain_api_error(e)}\n업비트 앱의 거래 내역/보유 코인을 꼭 확인하세요.")
+        return
+
+    if a.auto_trade:
+        from .auto import run_auto
+        from .compare import COINS
+        preset = a.strategy if a.strategy in TREND_PRESETS else "trend200"
+        if a.live:
+            need_live_switch()
+            from .apicheck import api_check
+            if not api_check(a.exchange, COINS):
+                tg.send("⚠️ 자동매매 중단: API 점검 실패 (IP/키/권한 확인)")
+                raise SystemExit(1)
+        make = (lambda sym: LiveBroker(a.exchange, sym)) if a.live else None
+        run_auto(fetch, pub, tg.send, make, COINS, preset, a.budget, a.max_total, a.live)
         return
 
     if a.check_signals:
