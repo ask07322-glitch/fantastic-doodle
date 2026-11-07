@@ -4,3 +4,4 @@ __pycache__/
 state.json
 trades.csv
 backtest.png
+signal_state.json

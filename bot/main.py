@@ -5,6 +5,7 @@ import ccxt
 import pandas as pd
 from .backtest import run as backtest
 from .broker import PaperBroker, LiveBroker
+from .notify import Telegram, find_chat_ids, load_env
 from .presets import ALL_PRESETS
 from .strategy import day_of, signal_for
 
@@ -56,8 +57,34 @@ def main():
     ap.add_argument("--status", action="store_true", help="지금 각 코인이 평균선 위(보유)/아래(현금)인지 보기")
     ap.add_argument("--position", type=float, default=None,
                     help="매수 때 현금의 몇 %%를 쓸지 (0~1, 예: 0.1=10%%). 기본: 전략별 설정. 백테스트/모의/실거래에 적용")
+    ap.add_argument("--check-signals", action="store_true",
+                    help="하루 1번 실행: 큰 흐름 신호가 바뀌었는지 확인해서 텔레그램으로 알림")
+    ap.add_argument("--summary", action="store_true", help="--check-signals와 함께: 변경이 없어도 현재 상태 전송")
+    ap.add_argument("--telegram-test", action="store_true", help="텔레그램 테스트 메시지 보내기")
+    ap.add_argument("--telegram-chat-id", action="store_true", help="텔레그램 채팅 ID 찾기 (봇에게 먼저 메시지를 보낸 뒤)")
     ap.add_argument("--live", action="store_true", help="실거래 (기본은 모의매매)")
     a = ap.parse_args()
+    load_env()  # .env의 API 키/텔레그램 설정 읽기
+    tg = Telegram()
+
+    if a.telegram_chat_id:
+        if not tg.token:
+            raise SystemExit(".env에 TELEGRAM_BOT_TOKEN을 먼저 넣어 주세요.")
+        try:
+            ids = find_chat_ids(tg.token)
+        except Exception as e:
+            raise SystemExit(f"조회 실패 ({type(e).__name__}). 토큰을 확인해 주세요.")
+        if not ids:
+            raise SystemExit("메시지가 없습니다. 텔레그램에서 만든 봇에게 아무 말이나 보낸 뒤 다시 실행하세요.")
+        for cid, name in ids:
+            print(f"채팅 ID: {cid}  ({name})")
+        return
+
+    if a.telegram_test:
+        if not tg.enabled:
+            raise SystemExit(".env에 TELEGRAM_BOT_TOKEN과 TELEGRAM_CHAT_ID를 넣어 주세요.")
+        print("전송 성공" if tg.send("✅ 코인 봇 텔레그램 연결 테스트입니다.") else "전송 실패 (토큰/채팅ID 확인)")
+        return
 
     pub = getattr(ccxt, a.exchange)({"enableRateLimit": True})
     pub.rateLimit = max(pub.rateLimit, 150)  # 요청 간격을 넉넉히 (업비트 한도 보호)
@@ -71,6 +98,13 @@ def main():
     if a.compare:
         from .compare import compare
         compare(fetch, pub, max(a.candles, 2000), slippage=a.slippage)
+        return
+
+    if a.check_signals:
+        from .signals import check_signals
+        if not tg.enabled:
+            print("[안내] 텔레그램 설정이 없어 화면에만 표시합니다 (.env 확인).")
+        check_signals(fetch, pub, tg.send, summary=a.summary)
         return
 
     if a.status:
@@ -107,6 +141,8 @@ def main():
         broker = PaperBroker(slippage=a.slippage)
     print(f"[start] {a.exchange} {a.symbol} {tf} strategy={a.strategy} "
           f"mode={'LIVE' if a.live else 'PAPER'}")
+    mode_tag = "실거래" if a.live else "모의"
+    tg.send(f"[{mode_tag}] 봇 시작: {a.symbol} {tf} {a.strategy}")
 
     bpd = 86400 / pub.parse_timeframe(tf)
     if st.kind == "vbreak" and bpd < 2:
@@ -135,6 +171,7 @@ def main():
                     broker.sell_all(price)
                     bars_since_exit = 0
                     print(f"[sell] {price:,.0f} {why or 'signal'} equity={broker.equity(price):,.0f}")
+                    tg.send(f"[{mode_tag}] 📉 매도 {a.symbol} {price:,.0f}원 ({why or '신호'})")
                     _log("sell", price)
             elif (not halted and (new_candle or st.one_per_day) and bars_since_exit > st.cooldown
                   and (not st.one_per_day or day_of(df["ts"].iloc[-1]) != buy_day)):
@@ -144,6 +181,7 @@ def main():
                         peak = price
                         buy_day = day_of(df["ts"].iloc[-1])
                         print(f"[buy] {price:,.0f}")
+                        tg.send(f"[{mode_tag}] 📈 매수 {a.symbol} {price:,.0f}원")
                         _log("buy", price)
             last_candle = df["ts"].iloc[-2]
         except (ccxt.NetworkError, ccxt.ExchangeNotAvailable) as e:

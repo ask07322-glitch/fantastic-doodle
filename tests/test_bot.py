@@ -188,3 +188,50 @@ def test_status_runs(capsys):
     status(lambda ex, s, tf, n: df, None, coins=["BTC/KRW"])
     out = capsys.readouterr().out
     assert "trend100" in out and "trend200" in out and "BTC/KRW" in out
+
+
+def test_telegram_send_and_no_token_leak(monkeypatch, capsys):
+    from bot import notify
+    sent = {}
+    class R:
+        status_code = 200
+    monkeypatch.setattr(notify.requests, "post", lambda url, json, timeout: sent.update(url=url, **json) or R())
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "SECRET123"); monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    assert notify.Telegram().send("hi") and sent["chat_id"] == "42" and sent["text"] == "hi"
+
+    def boom(url, json, timeout): raise RuntimeError("failed for " + url)
+    monkeypatch.setattr(notify.requests, "post", boom)
+    assert notify.Telegram().send("hi") is False
+    assert "SECRET123" not in capsys.readouterr().out      # 토큰이 화면에 나오면 안 됨
+
+
+def test_telegram_disabled_without_config(monkeypatch):
+    from bot import notify
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False); monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    assert notify.Telegram().send("x") is False
+
+
+def test_load_env(tmp_path, monkeypatch):
+    from bot import notify
+    f = tmp_path / ".env"; f.write_text("# c\nFOO_X=bar\nBAZ_X = \"q\"\n")
+    monkeypatch.delenv("FOO_X", raising=False); monkeypatch.delenv("BAZ_X", raising=False)
+    notify.load_env(str(f))
+    import os
+    assert os.environ["FOO_X"] == "bar" and os.environ["BAZ_X"] == "q"
+
+
+def test_check_signals_alerts_only_on_change(tmp_path):
+    from bot.signals import check_signals
+    up = np.linspace(100, 300, 320)
+    down = np.r_[up, np.linspace(300, 150, 60)]
+    mk = lambda c: pd.DataFrame({"ts": np.arange(len(c)) * DAY_MS, "close": c})
+    msgs, state = [], str(tmp_path / "s.json")
+    kw = dict(coins=["BTC/KRW"], state_path=state)
+    check_signals(lambda e, s, tf, n: mk(up), None, msgs.append, **kw)
+    assert len(msgs) == 1 and "시작" in msgs[0]            # 첫 실행: 기준 저장 + 시작 안내
+    check_signals(lambda e, s, tf, n: mk(up), None, msgs.append, **kw)
+    assert len(msgs) == 1                                   # 변경 없으면 조용
+    alerts = check_signals(lambda e, s, tf, n: mk(down), None, msgs.append, **kw)
+    assert alerts and "매도 신호" in msgs[-1]               # 보유→현금으로 바뀌면 알림
+    check_signals(lambda e, s, tf, n: mk(down), None, msgs.append, **kw)
+    assert len(msgs) == 2                                   # 같은 신호는 반복 알림 없음

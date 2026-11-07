@@ -8,7 +8,7 @@ ccxt 기반(업비트·빗썸·바이낸스 등). **기본은 모의매매**이�
 pip install -r requirements.txt
 python -m bot.main --backtest --symbol BTC/KRW --timeframe 1h   # 백테스트
 python -m bot.main                                              # 모의매매
-cp .env.example .env && export $(cat .env | xargs)
+cp .env.example .env   # 윈도우: copy .env.example .env  (봇이 .env를 자동으로 읽습니다)
 python -m bot.main --live                                       # 실거래 (주의)
 pytest                                                          # 테스트
 ```
@@ -32,3 +32,12 @@ python -m bot.main --strategy trend200 --position 0.1 --live --interval 3600   #
 ```
 실거래는 봇이 직접 산 수량만 팝니다(`state.json`에 기록). 계좌에 원래 있던 코인은 건드리지 않습니다.
 시작 시 이미 평균선 위라면 바로 매수합니다.
+
+## 텔레그램 알림
+`.env`에 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`를 넣은 뒤:
+```bash
+python -m bot.main --telegram-test       # 테스트 메시지
+python -m bot.main --check-signals       # 하루 1번: 신호가 바뀌면 알림 (첫 실행은 기준만 저장)
+python -m bot.main --check-signals --summary   # 변경 없어도 현재 상태 전송
+```
+윈도우 작업 스케줄러에 `--check-signals`를 매일 09:10(업비트 일봉 마감 직후)에 걸어 두면 창을 켜 둘 필요가 없습니다.
