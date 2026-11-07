@@ -199,6 +199,7 @@ def test_telegram_send_and_no_token_leak(monkeypatch, capsys):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "SECRET123"); monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
     assert notify.Telegram().send("hi") and sent["chat_id"] == "42" and sent["text"] == "hi"
 
+    monkeypatch.setattr(notify.time, "sleep", lambda s: None)
     def boom(url, json, timeout): raise RuntimeError("failed for " + url)
     monkeypatch.setattr(notify.requests, "post", boom)
     assert notify.Telegram().send("hi") is False
@@ -235,3 +236,22 @@ def test_check_signals_alerts_only_on_change(tmp_path):
     assert alerts and "매도 신호" in msgs[-1]               # 보유→현금으로 바뀌면 알림
     check_signals(lambda e, s, tf, n: mk(down), None, msgs.append, **kw)
     assert len(msgs) == 2                                   # 같은 신호는 반복 알림 없음
+
+
+def test_telegram_retries_on_timeout_and_explains(monkeypatch):
+    import requests
+    from bot import notify
+    monkeypatch.setattr(notify.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+    class R:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"result": [{"message": {"chat": {"id": 7, "first_name": "나"}}}]}
+    def flaky(url, timeout):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise requests.ReadTimeout("slow")
+        return R()
+    monkeypatch.setattr(notify.requests, "get", flaky)
+    assert notify.find_chat_ids("TOK") == [(7, "나")] and calls["n"] == 3   # 두 번 느려도 세 번째에 성공
+    assert "토큰 문제가 아닙니다" in notify.explain(requests.ReadTimeout("x"))

@@ -5,7 +5,7 @@ import ccxt
 import pandas as pd
 from .backtest import run as backtest
 from .broker import PaperBroker, LiveBroker
-from .notify import Telegram, find_chat_ids, load_env
+from .notify import Telegram, explain, find_chat_ids, load_env
 from .presets import ALL_PRESETS
 from .strategy import day_of, signal_for
 
@@ -73,7 +73,7 @@ def main():
         try:
             ids = find_chat_ids(tg.token)
         except Exception as e:
-            raise SystemExit(f"조회 실패 ({type(e).__name__}). 토큰을 확인해 주세요.")
+            raise SystemExit(f"조회 실패: {explain(e)}")
         if not ids:
             raise SystemExit("메시지가 없습니다. 텔레그램에서 만든 봇에게 아무 말이나 보낸 뒤 다시 실행하세요.")
         for cid, name in ids:
