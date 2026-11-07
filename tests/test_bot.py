@@ -148,3 +148,43 @@ def test_trendhold_avoids_crash_with_few_trades():
     assert res["trades"] <= 6
     assert res["max_drawdown_pct"] > res["buy_hold_mdd_pct"]   # 보유보다 낙폭이 작아야 함
     assert res["return_pct"] > res["buy_hold_pct"]             # 급락 전에 빠져나와 이득
+
+
+class FakeEx:
+    id = "upbit"
+    bal = {}
+    def __init__(self, cfg): pass
+    def fetch_balance(self): return {k: {"free": v} for k, v in FakeEx.bal.items()}
+    def create_order(self, sym, typ, side, amount, price=None, params=None):
+        if side == "buy":   # 업비트식: amount=KRW 금액, 가격 100원, 수수료 무시
+            FakeEx.bal["KRW"] -= amount
+            FakeEx.bal["BTC"] += amount / 100
+        else:
+            FakeEx.bal["BTC"] -= amount
+            FakeEx.bal["KRW"] += amount * 100
+
+
+def test_live_broker_sells_only_what_bot_bought(monkeypatch, tmp_path):
+    import ccxt
+    from bot import broker as bm
+    monkeypatch.setattr(ccxt, "fakeex", FakeEx, raising=False)
+    monkeypatch.setattr(bm.time, "sleep", lambda s: None)
+    monkeypatch.setenv("API_KEY", "x"); monkeypatch.setenv("API_SECRET", "y")
+    FakeEx.bal = {"KRW": 100_000.0, "BTC": 5.0}   # 원래 BTC 5개 보유 중
+    b = bm.LiveBroker("fakeex", "BTC/KRW", str(tmp_path / "state.json"))
+    assert b.qty == 0                      # 원래 보유분은 봇의 포지션이 아님
+    assert b.buy(100, 10_000) and abs(b.qty - 100) < 1e-6   # 10,000원어치=100개
+    b2 = bm.LiveBroker("fakeex", "BTC/KRW", str(tmp_path / "state.json"))  # 재시작해도 기억
+    assert abs(b2.qty - 100) < 1e-6
+    assert b2.sell_all(100)
+    assert abs(FakeEx.bal["BTC"] - 5.0) < 1e-6   # 원래 보유분은 그대로
+    assert b2.qty == 0
+
+
+def test_status_runs(capsys):
+    from bot.status import status
+    c = np.r_[np.linspace(100, 200, 200), np.linspace(200, 120, 60)]
+    df = pd.DataFrame({"ts": np.arange(len(c)) * DAY_MS, "close": c})
+    status(lambda ex, s, tf, n: df, None, coins=["BTC/KRW"])
+    out = capsys.readouterr().out
+    assert "trend100" in out and "trend200" in out and "BTC/KRW" in out

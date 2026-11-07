@@ -1,6 +1,8 @@
 """브로커: 모의(PaperBroker) / 실거래(LiveBroker). 같은 인터페이스."""
 from __future__ import annotations
+import json
 import os
+import time
 from dataclasses import dataclass, field
 
 FEE = 0.0005  # 0.05% 수수료 가정 (업비트 KRW 마켓)
@@ -42,9 +44,13 @@ class PaperBroker:
 
 
 class LiveBroker:
-    """ccxt 기반 실거래. 시장가 주문. (업비트 시장가 매수는 금액 기준)"""
+    """ccxt 기반 실거래. 시장가 주문. (업비트 시장가 매수는 금액 기준)
 
-    def __init__(self, exchange_id: str, symbol: str):
+    안전장치: 봇이 직접 산 수량만 기억(state.json)해서 그만큼만 판다.
+    계좌에 원래 있던 코인은 건드리지 않는다.
+    """
+
+    def __init__(self, exchange_id: str, symbol: str, state_path: str = "state.json"):
         import ccxt
         self.symbol = symbol
         self.ex = getattr(ccxt, exchange_id)({
@@ -53,7 +59,27 @@ class LiveBroker:
             "enableRateLimit": True,
         })
         self.base, self.quote = symbol.split("/")
-        self.entry = 0.0
+        self.state_path = state_path
+        self._bot_qty, self.entry = self._load()
+
+    # ---- 봇의 포지션 기억 ----
+    def _load(self):
+        try:
+            with open(self.state_path) as f:
+                s = json.load(f).get(self.symbol, {})
+            return float(s.get("qty", 0.0)), float(s.get("entry", 0.0))
+        except (OSError, ValueError):
+            return 0.0, 0.0
+
+    def _save(self):
+        try:
+            with open(self.state_path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+        data[self.symbol] = {"qty": self._bot_qty, "entry": self.entry}
+        with open(self.state_path, "w") as f:
+            json.dump(data, f)
 
     def _free(self, cur: str) -> float:
         return float(self.ex.fetch_balance().get(cur, {}).get("free", 0) or 0)
@@ -64,27 +90,41 @@ class LiveBroker:
 
     @property
     def qty(self) -> float:
-        return self._free(self.base)
+        """봇이 보유 중인 수량 (실제 잔고보다 클 수 없음)."""
+        if self._bot_qty <= 0:
+            return 0.0
+        return min(self._bot_qty, self._free(self.base))
 
     def equity(self, price: float) -> float:
         return self.cash + self.qty * price
 
     def buy(self, price: float, budget: float) -> bool:
-        if budget <= 0 or self.qty * price > 1000:
+        if budget <= 0 or self._bot_qty * price > 1000:
             return False
-        amount = budget / price
-        # 업비트: 시장가 매수는 price=총금액 필요
+        before = self._free(self.base)
+        # 업비트: 시장가 매수는 총금액(KRW)을 넘긴다
         params = {"createMarketBuyOrderRequiresPrice": False}
         self.ex.create_order(self.symbol, "market", "buy",
-                             budget if self.ex.id == "upbit" else amount,
-                             None, params)
-        self.entry = price
+                             budget if self.ex.id == "upbit" else budget / price, None, params)
+        bought = 0.0
+        for _ in range(6):  # 체결 반영까지 잠깐 기다림
+            time.sleep(0.5)
+            bought = self._free(self.base) - before
+            if bought > 0:
+                break
+        if bought <= 0:
+            bought = budget * (1 - FEE) / price  # 잔고 반영이 늦으면 추정치 사용
+        self._bot_qty, self.entry = bought, price
+        self._save()
         return True
 
     def sell_all(self, price: float) -> bool:
-        q = self.qty
+        q = min(self._bot_qty, self._free(self.base))
         if q * price < 1000:
+            self._bot_qty, self.entry = 0.0, 0.0  # 이미 없는 포지션 정리
+            self._save()
             return False
         self.ex.create_order(self.symbol, "market", "sell", q)
-        self.entry = 0.0
+        self._bot_qty, self.entry = 0.0, 0.0
+        self._save()
         return True

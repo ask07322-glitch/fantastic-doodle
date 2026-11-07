@@ -24,3 +24,11 @@ python -m bot.main --compare-trend                         # 일봉 5년+: trend
 python -m bot.main --backtest --strategy trend200          # 그림으로 보기 (기본 1d)
 ```
 장기 평균선 위면 전액 보유, 아래면 현금. 목표는 보유보다 더 버는 것이 아니라 큰 하락을 피하는 것(최대낙폭↓).
+
+```bash
+python -m bot.main --status                                    # 지금 평균선 위(보유)/아래(현금)?
+python -m bot.main --strategy trend200 --position 0.1          # 모의매매, 현금의 10%만 사용
+python -m bot.main --strategy trend200 --position 0.1 --live --interval 3600   # 실거래(소액!)
+```
+실거래는 봇이 직접 산 수량만 팝니다(`state.json`에 기록). 계좌에 원래 있던 코인은 건드리지 않습니다.
+시작 시 이미 평균선 위라면 바로 매수합니다.

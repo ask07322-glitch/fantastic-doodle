@@ -1,6 +1,6 @@
 """실행: python -m bot.main [--live] [--backtest] [--compare]"""
 from __future__ import annotations
-import argparse, csv, time, datetime as dt
+import argparse, csv, time, dataclasses, datetime as dt
 import ccxt
 import pandas as pd
 from .backtest import run as backtest
@@ -53,17 +53,29 @@ def main():
     ap.add_argument("--candles", type=int, default=1000, help="백테스트에 쓸 캔들 개수")
     ap.add_argument("--slippage", type=float, default=0.001,
                     help="체결가가 불리하게 밀리는 비율 (기본 0.001 = 0.1%%). 백테스트/비교/모의매매에 적용")
+    ap.add_argument("--status", action="store_true", help="지금 각 코인이 평균선 위(보유)/아래(현금)인지 보기")
+    ap.add_argument("--position", type=float, default=None,
+                    help="매수 때 현금의 몇 %%를 쓸지 (0~1, 예: 0.1=10%%). 기본: 전략별 설정. 백테스트/모의/실거래에 적용")
     ap.add_argument("--live", action="store_true", help="실거래 (기본은 모의매매)")
     a = ap.parse_args()
 
     pub = getattr(ccxt, a.exchange)({"enableRateLimit": True})
     pub.rateLimit = max(pub.rateLimit, 150)  # 요청 간격을 넉넉히 (업비트 한도 보호)
     st, risk = ALL_PRESETS[a.strategy]
+    if a.position is not None:
+        if not 0 < a.position <= 1:
+            raise SystemExit("--position은 0보다 크고 1 이하여야 합니다 (예: 0.1 = 현금의 10%)")
+        risk = dataclasses.replace(risk, position_pct=a.position)
     tf = a.timeframe or ("1d" if st.kind == "trendhold" else "1h")
 
     if a.compare:
         from .compare import compare
         compare(fetch, pub, max(a.candles, 2000), slippage=a.slippage)
+        return
+
+    if a.status:
+        from .status import status
+        status(fetch, pub)
         return
 
     if a.compare_trend:
@@ -86,6 +98,8 @@ def main():
         return
 
     if a.live:
+        print(f"[실거래] {a.exchange} {a.symbol} | 전략 {a.strategy} | 매수 때 현금의 {risk.position_pct*100:.0f}% 사용")
+        print("봇이 직접 산 수량만 팝니다(state.json에 기록). 계좌에 원래 있던 코인은 건드리지 않습니다.")
         if input("실거래 모드입니다. 실제 돈이 거래됩니다. 'YES' 입력: ") != "YES":
             return
         broker = LiveBroker(a.exchange, a.symbol)
