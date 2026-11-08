@@ -11,13 +11,15 @@ from .strategy import day_of, signal_for
 
 
 def _page(ex, symbol, tf, **kw):
-    """요청 한도(RateLimitExceeded)에 걸리면 기다렸다가 다시 시도."""
-    for attempt in range(6):
+    """요청 한도·일시적 네트워크 오류(절전 복귀 직후 등)는 기다렸다가 다시 시도."""
+    waits = (5, 10, 20, 30, 30)
+    for i in range(len(waits) + 1):
         try:
             return ex.fetch_ohlcv(symbol, tf, **kw)
-        except ccxt.RateLimitExceeded:
-            time.sleep(2 * (attempt + 1))
-    raise ccxt.RateLimitExceeded("요청 한도 초과: 잠시 후 다시 시도하세요")
+        except ccxt.NetworkError:  # RateLimitExceeded, RequestTimeout, ExchangeNotAvailable 포함
+            if i == len(waits):
+                raise
+            time.sleep(waits[i])
 
 
 def fetch(ex, symbol, tf, limit=200) -> pd.DataFrame:

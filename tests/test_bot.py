@@ -312,3 +312,17 @@ def test_explain_api_error():
     assert "IP" in explain_api_error(Exception('{"error":{"name":"no_authorization_ip"}}'))
     assert "권한" in explain_api_error(Exception("out_of_scope"))
     assert "올바르지" in explain_api_error(ccxt.AuthenticationError("x"))
+
+
+def test_fetch_retries_on_network_error_after_wake(monkeypatch):
+    import ccxt
+    from bot import main as m
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    class Ex2:
+        calls = 0
+        def fetch_ohlcv(self, sym, tf, **kw):
+            Ex2.calls += 1
+            if Ex2.calls <= 3:
+                raise ccxt.RequestTimeout("network not ready")   # 절전 복귀 직후 인터넷 미연결
+            return [[1, 1, 1, 1, 1, 1]]
+    assert len(m.fetch(Ex2(), "BTC/KRW", "1d", 100)) == 1 and Ex2.calls == 4
