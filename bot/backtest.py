@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 from .broker import PaperBroker
 from .risk import Risk
+from .stats import trade_stats
 from .strategy import Strategy, day_of, signal_for
 
 
@@ -48,6 +49,7 @@ def run(df: pd.DataFrame, strategy: Strategy | None = None, risk: Risk | None = 
         "buy_hold_mdd_pct": hold_mdd,
         "trades": sum(1 for t in b.log if t[0] == "sell"),
         "trade_list": trades,
+        "stats": trade_stats([x["pnl_pct"] for x in trades if x["side"] == "sell"]),
         "equity_curve": curve,
         "equity_index": idx,
         "start_cash": cash,

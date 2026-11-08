@@ -70,6 +70,9 @@ def main():
                     help="하루 1번 실행: 신호가 바뀐 코인만 주문(기본 모의, --live면 실제)")
     ap.add_argument("--budget", type=float, default=30_000, help="--auto-trade: 1회 매수 금액(원)")
     ap.add_argument("--max-total", type=float, default=100_000, help="--auto-trade: 봇이 보유할 총액 상한(원)")
+    ap.add_argument("--sweep", action="store_true",
+                    help="손절/추적손절/평균선 길이를 바꿔 보며 앞 60%로 고르고 뒤 40%로 확인(과적합 점검)")
+    ap.add_argument("--paper-report", action="store_true", help="모의매매 기록(paper_trades.csv) 통계: 승률·기대값·켈리")
     ap.add_argument("--live", action="store_true", help="실거래 (기본은 모의매매)")
     a = ap.parse_args()
     load_env()  # .env의 API 키/텔레그램 설정 읽기
@@ -112,6 +115,16 @@ def main():
         if os.environ.get("ENABLE_LIVE", "").strip().upper() != "YES":
             raise SystemExit("실거래 스위치가 꺼져 있습니다. .env에 ENABLE_LIVE=YES 를 넣어야 실제 주문이 나갑니다.")
 
+    if a.paper_report:
+        from .report import paper_report
+        paper_report()
+        return
+
+    if a.sweep:
+        from .sweep import sweep
+        sweep(fetch, pub, max(a.candles, 2000), slippage=a.slippage)
+        return
+
     if a.api_check:
         from .apicheck import api_check
         from .compare import COINS
@@ -142,7 +155,7 @@ def main():
                 tg.send("⚠️ 자동매매 중단: API 점검 실패 (IP/키/권한 확인)")
                 raise SystemExit(1)
         make = (lambda sym: LiveBroker(a.exchange, sym)) if a.live else None
-        run_auto(fetch, pub, tg.send, make, COINS, preset, a.budget, a.max_total, a.live)
+        run_auto(fetch, pub, tg.send, make, COINS, preset, a.budget, a.max_total, a.live, slippage=a.slippage)
         return
 
     if a.check_signals:

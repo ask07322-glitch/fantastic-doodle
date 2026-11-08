@@ -326,3 +326,45 @@ def test_fetch_retries_on_network_error_after_wake(monkeypatch):
                 raise ccxt.RequestTimeout("network not ready")   # 절전 복귀 직후 인터넷 미연결
             return [[1, 1, 1, 1, 1, 1]]
     assert len(m.fetch(Ex2(), "BTC/KRW", "1d", 100)) == 1 and Ex2.calls == 4
+
+
+def test_trade_stats_and_kelly():
+    from bot.stats import trade_stats, kelly_fraction, suggest_position
+    s = trade_stats([10, -5, 20, -5, -5])          # 승률 40%, 평균이익 15, 평균손실 5
+    assert s["n"] == 5 and abs(s["win_rate"] - 40) < 1e-9
+    assert abs(s["payoff"] - 3.0) < 1e-9 and abs(s["expectancy"] - 3.0) < 1e-9   # 0.4*15 - 0.6*5
+    assert abs(kelly_fraction(40, 3.0) - 0.2) < 1e-9                              # 0.4 - 0.6/3
+    assert kelly_fraction(30, 1.0) == 0.0                                          # 기대값 마이너스면 0
+    f, note = suggest_position(s)                                                 # 표본 부족이면 0 + 경고
+    assert f == 0.0 and "표본" in note
+
+
+def test_backtest_reports_stats():
+    res = run(series(n=800, seed=7), *PRESETS["base"])
+    assert res["stats"]["n"] == res["trades"]
+
+
+def test_paper_mode_records_virtual_pnl(monkeypatch, tmp_path):
+    import csv
+    from bot.auto import run_auto
+    make, mk, up, dn, sp = _auto_env(monkeypatch, tmp_path)
+    log = str(tmp_path / "paper.csv")
+    kw = dict(coins=["BTC/KRW"], preset="trend200", budget=30000, max_total=100000, live=False,
+              state_path=sp, log_path=log, slippage=0.001)
+    run_auto(lambda e, s, tf, n: mk(dn), None, lambda m: None, None, **kw)   # 기준
+    run_auto(lambda e, s, tf, n: mk(up), None, lambda m: None, None, **kw)   # 가상 매수
+    run_auto(lambda e, s, tf, n: mk(dn), None, lambda m: None, None, **kw)   # 가상 매도 → 기록
+    rows = list(csv.DictReader(open(log, encoding="utf-8")))
+    assert len(rows) == 1 and float(rows[0]["entry"]) > 0 and "pnl_pct" in rows[0]
+
+
+def test_sweep_runs_and_reports(capsys):
+    from bot.sweep import sweep
+    DAY = 86400000
+    def fake(ex, sym, tf, n):
+        rng = np.random.default_rng(abs(hash(sym)) % 1000)
+        c = 100 * np.exp(np.cumsum(rng.normal(0.0004, 0.02, 1500)))
+        return pd.DataFrame({"ts": np.arange(1500) * DAY, "close": c})
+    df = sweep(fake, None, 1500, coins=["A", "B"], progress=lambda s: None)
+    out = capsys.readouterr().out
+    assert df is not None and len(df) == 48 and "과적합 점검" in out and "순위상관" in out

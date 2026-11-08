@@ -6,8 +6,11 @@
 - 첫 실행은 기준만 저장하고 주문하지 않는다(이미 오른 코인을 뒤늦게 쫓아 사지 않기 위해).
 """
 from __future__ import annotations
+import csv
 import json
+import os
 import pandas as pd
+from .broker import FEE
 from .presets import TREND_PRESETS
 from .strategy import trendhold_signal
 
@@ -24,8 +27,18 @@ def _load(path: str) -> dict:
         return {}
 
 
+def _log_paper(path, row):
+    new = not os.path.exists(path)
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        if new:
+            w.writerow(["date", "symbol", "preset", "entry_date", "entry", "exit", "pnl_pct", "hold_days"])
+        w.writerow(row)
+
+
 def run_auto(fetch, ex, send, make_broker, coins, preset: str, budget: float, max_total: float,
-             live: bool, state_path: str = "auto_state.json") -> list[str]:
+             live: bool, state_path: str = "auto_state.json", slippage: float = 0.001,
+             log_path: str = "paper_trades.csv") -> list[str]:
     st, _ = TREND_PRESETS[preset]
     mode = "🟢실거래" if live else "모의"
     prev_all = _load(state_path)
@@ -55,13 +68,25 @@ def run_auto(fetch, ex, send, make_broker, coins, preset: str, budget: float, ma
         ma, p = float(conf.rolling(st.trend).mean().iloc[-1]), float(conf.iloc[-1])
         info = f"종가 {p:,.0f} / {st.trend}일 평균 {ma:,.0f} ({(p / ma - 1) * 100:+.1f}%)"
         lines.append(f"{sym}: {'보유' if cur == IN else '현금'}  {info}")
+        keep = {k: prev_all.get(sym, {}).get(k) for k in ("entry", "entry_date")}
         if prev is None or prev == cur:
-            new_all[sym] = {"state": cur, "date": day}
+            new_all[sym] = {"state": cur, "date": day, **keep}
             continue
         head = f"[{mode}] {'📈 매수' if cur == IN else '📉 매도'} 신호 | {sym} {preset}\n{info}"
         try:
             if not live:
-                msgs.append(head + "\n(모의 모드라서 실제 주문은 하지 않았습니다)")
+                note = "(모의 모드라서 실제 주문은 하지 않았습니다)"
+                if cur == IN:
+                    keep = {"entry": price, "entry_date": day}
+                    note += f"\n가상 매수 기록: {price:,.0f}원"
+                elif keep.get("entry"):
+                    e = float(keep["entry"])   # 수수료·슬리피지 반영한 가상 손익
+                    pnl = ((1 - FEE) ** 2 * price * (1 - slippage) / (e * (1 + slippage)) - 1) * 100
+                    days = (pd.Timestamp(day) - pd.Timestamp(keep["entry_date"])).days
+                    _log_paper(log_path, [day, sym, preset, keep["entry_date"], e, price, round(pnl, 2), days])
+                    note += f"\n가상 손익: {pnl:+.1f}% ({days}일 보유) → paper_trades.csv에 기록"
+                    keep = {"entry": None, "entry_date": None}
+                msgs.append(head + "\n" + note)
             elif cur == IN:
                 b = broker(sym)
                 amt = min(budget, max_total - invested, b.cash * 0.995)
@@ -79,7 +104,7 @@ def run_auto(fetch, ex, send, make_broker, coins, preset: str, budget: float, ma
                     msgs.append(head + f"\n✅ 시장가 매도 주문: 봇 보유분 {q:g}개 전부")
                 else:
                     msgs.append(head + "\n주문하지 않음: 봇이 보유한 수량이 없습니다")
-            new_all[sym] = {"state": cur, "date": day}
+            new_all[sym] = {"state": cur, "date": day, **keep}
         except Exception as e:  # 실패하면 상태를 그대로 둬서 다음 실행 때 재시도
             msgs.append(head + f"\n⚠️ 주문 실패 ({type(e).__name__}) — 업비트 앱에서 확인하세요. 다음 실행 때 다시 시도합니다.")
     with open(state_path, "w") as f:
